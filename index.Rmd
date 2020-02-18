@@ -1,0 +1,968 @@
+---
+title: "Binary classification in R"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+  pdf_document: default
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi=300)
+```
+
+**Sean Trott**  
+*February 17, 2020*
+
+# High-level goals
+
+This tutorial is intended as an introduction to two^[Future iterations of the tutorial may extend this to other classification models, such as [linear discriminant analysis](https://en.wikipedia.org/wiki/Linear_discriminant_analysis).] approaches to binary classification: [logistic regression](https://en.wikipedia.org/wiki/Logistic_regression) and [support vector machines](https://en.wikipedia.org/wiki/Support-vector_machine). It will accompany my 02/17/2020 workshop, "Binary classification in R".
+
+Concepts covered will include:
+
+- What is binary classification?  
+- Why use logistic regression instead of linear regression? 
+- Why use an SVM instead of logistic regression?
+- How do we build a classification model in R, and how do we interpret the output?  
+- How do we generate predictions from a classification model?  
+
+As a second-order goal, the tutorial will also briefly cover certain aspects of data wrangling and visualization in R.
+
+The examples and descriptions throughout the tutorial were sourced heavily from [An Introduction to Statistical Learning in R](http://faculty.marshall.usc.edu/gareth-james/ISL/). I also drew from several online blogs, including:
+
+- [Support Vector Machines in R](https://www.datacamp.com/community/tutorials/support-vector-machines-r)  
+- [Classifying data using Support Vector Machines in R](https://www.geeksforgeeks.org/classifying-data-using-support-vector-machinessvms-in-r/)
+
+# Load libraries
+
+We'll work with three main libraries: `library(tidyverse)`, `library(ISLR)`, and `library(e1071)`. If you don't have them installed already, use `install.packages("tidyverse")`,  `install.packages("ISLR")`, and `install.packages("e1071")` to install them.
+
+```{r include=FALSE}
+library(tidyverse)
+library(forcats)
+library(ISLR)
+library(e1071)
+```
+
+
+# Introduction: what is binary classification?
+
+**Classification** is the task of predicting a *qualitative* or *categorical* response variable. This is a common situation: it's often the case that we want to know whether manipulating some $X$ variable changes the probability of a certain categorical outcome (rather than changing the value of a continuous outcome).
+
+Examples of classification problems include:
+
+- Classifying a person's **medical condition** from a list of symptoms.  
+- Detecting whether a certain transaction is **fradulent**.  
+- Predicting the **part of speech** of a word.  
+- Pretty much any experiment in which the task involves a forced choice between different responses (e.g., "Yes" or "No").
+
+**Binary classification** refers to a subset of these problems in which there are two possible outcomes. Given some variables $X_1, ..., X_n$, we want to predict the *probability* that a particular observation belongs to one class or another. 
+
+In this tutorial, we'll use several different datasets to demonstrate binary classification. We'll start out by using the `Default` dataset, which comes with the `ISLR` package. We'll then extend some of what we learn on this dataset to one of my own datasets, which involves trying to predict whether or not an utterance is a **request** (*request* vs. *non-request*) from a set of seven acoustic features. 
+
+
+# Logistic regression
+
+To start off, let's try to model the binary outcome of whether an individual will default on their loan. If you've imported the `ISLR` library, the `Default` dataset should be available.
+
+## Load and inspect the data
+
+We can get a sense for what the dataset looks like by looking at the first few rows:
+
+```{r}
+head(Default)
+```
+
+And we can get a sense for the distribution of `default` values by looking at it in a table:
+
+```{r}
+table(Default$default)
+```
+
+It's clearly an unbalanced distribution. Most people in this dataset didn't default on their loans. We can calculate the proportion by dividing the values in this table by the total number of rows in the dataset:
+
+```{r}
+table(Default$default) / nrow(Default)
+```
+
+Note that an alternative way to get this information would be to use several handy functions from the `tidyverse` library. We can *group* our observations by whether or not they defaulted using `group_by`, then count the number and proportion in each cell using some operations in the `summarise` function. 
+
+```{r}
+df_summary = Default %>%
+  group_by(default) %>%
+  summarise(count = n(),
+            proportion = n() / nrow(Default))
+
+df_summary
+```
+
+
+Note the `%>%` syntax: this is called [piping](https://www.datacamp.com/community/tutorials/pipe-r-tutorial), and is a common way to **chain together** multiple functions in R. It's a shorthand for saying: use the *output* of this function call (or dataframe) as the *input* to the next function. Personally, I think it makes for nice, readable code, especially if you write each function call on a different line---that makes it clear exactly which transformations you're applying to the data.
+
+## Why not linear regression?
+
+Our $Y$ variable is categorical: `yes` vs. `no`. We can't use linear regression for a categorical variable.
+
+Theoretically, however, we *could* recode this as a quantitative variable, setting `yes` to `1` and `no` to `0`. In fact, we could even do this for variables with >2 levels, like recoding `noun/verb/adjective` as `0/1/2`. But there are a couple of problems with this approach:
+
+### Problem 1: Imposing a false ordering 
+
+Recoding your $Y$ variable as quantitative imposes an *ordering* on that variable. If there's only two levels, this is less problematic. But iff your $Y$ variable has more than two levels (e.g., `noun/verb/adjective/`), then the ordering you choose will greatly affect the slope of your regression line. Given that nominal variables have no intrinsic ordering by definition, this makes linear regression unsuitable for predicting $Y$ variables with >2 classes.
+
+As noted above, this is less of a problem for $Y$ variables with only two levels. We can simply impose a decision threshold, e.g., "if $\hat{Y} > .5$, predict `yes`, otherwise `no`".
+
+### Problem 2: Linear regression doesn't respect boundaries
+
+Even for binary variables, another serious problem is that linear regression will produce estimates for $\hat{Y}$ that fall outside our $[0, 1]$ range. Linear regression fits a *line*, and lines will extend past $[0, 1]$ at some constant rate (i.e., the slope). 
+
+Sometimes this is okay, depending on our objective. But it certainly makes the values for $\hat{Y}$ very crude as probability estimates, since many values will be less than 0 or greater than 1. 
+
+We can demonstrate this empirically on the $Default$ dataset. First, let's recode our `default` variable as a numeric variable^[Note the **mutate** function being called here. This allows us to  create a new column called `default_numeric`, whose values match the conditions specified by the `case_when` function.]:
+
+```{r}
+# Recode as numeric
+Default = Default %>%
+  mutate(
+    default_numeric = case_when(
+      default == "Yes" ~ 1,
+      default == "No" ~ 0
+    )
+  )
+```
+
+The `mean` of our new `default_numeric` variable should match the proportion of individuals who defaulted on their loan, whih we  calculated earlier:
+
+```{r}
+mean(Default$default_numeric)
+```
+
+
+We can then build a linear model using `lm`, predicting `default_numeric` from one or more of our possible predictors. Let's start out just using `balance`:
+
+```{r}
+simple_linear_model = lm(data = Default,
+                         default_numeric ~ balance)
+
+summary(simple_linear_model)
+```
+
+We see that `balance` has a positive coefficient, meaning that individuals are more likely to default when they have a higher balance. We can plot the relationship like so:
+
+```{r}
+Default %>%
+  ggplot(aes(x = balance,
+             y = default_numeric)) +
+  geom_point(alpha = .4) +
+  geom_smooth(method = "lm") +
+  labs(y = "Default (1 = yes, 0 = no)",
+       title = "Default outcome by balance") +
+  theme_minimal()
+```
+
+There are a few things to note about the line of best fit. First, the predicted $\hat{Y}$ values are actually **negative** for certain values of $X$, which seems odd if we're conceptualizing these values as probabilities. Second, if we were to extend `balance` into positive infinity, the line would extend at the same rate, meaning that for large enough values of `balance`, we'd have predicted $\hat{Y}$ values larger than 1--which again, seems odd if $\hat{Y}$ is meant to correspond to probability. And third, it's worth noting that our predicted $\hat{Y}$ values don't come close to .5 even for very large values of `balance` (when we're pretty confident in a `default` outcome). This is another consequence of fitting a line to our binary data.
+
+What we really want is a way to directly model the *probability* of our $Y$ values, rather than trying to force our linear model onto a binary outcome. I.e., we need to constrain our predictions between $[0, 1]$. This is where logistic regression comes in.
+
+## The logistic model
+
+Rather than modeling $Y$ directly, logistic regression models the *probability* that $Y$ belongs to a particular category given some $X$ variable, e.g., $P(default = Yes | balance)$. The output of a logistic regression model will be values between $[0, 1]$, which we can convert to class labels using a decision threshold (e.g., .5).
+
+Recall that linear regression uses the following formula:
+
+$Y = \beta_0 + \beta_1 X$
+
+Above, we used this formula to try to roughly represent probabilities, i.e., $p(Y) = \beta_0 + \beta_1 X$. But now we can model these probabilities using the *logistic function*, which looks like this:
+
+$p(Y) = \frac{e^{\beta_0 + \beta_1X}}{1 + e^{\beta_0 + \beta_1X}}$
+
+After some manipulation, we can change this to: $\frac{p(Y)}{1 - p(Y)} = e^{\beta_0 + \beta_1X}$. This quantity $\frac{p(Y)}{1 - p(Y)}$ is called the **odds**, and is bounded between $[0, +\infty]$. Small values of $p(Y)$ correspond to very low *odds*, e.g.,  $\frac{.2}{1 - .2} = .25$, while large values correspond to higher *odds*, e.g., $\frac{.9}{1 - .9} = 9$.
+
+Finally, we can take the **log** of both sides, which produces this equation:
+
+$\log{\frac{p(Y)}{1 - p(Y)}} = \beta_0 + \beta_1X$
+
+Now the left side of the equation is the **log-odds** (or **logit**). What's magical about this is that the righthand side looks identical to our formula for ordinary linear regression!
+
+## Building an intuition
+
+By using the equation $\log{\frac{p(Y)}{1 - p(Y)}} = \beta_0 + \beta_1X$, **we're modeling a linear relationship between $X$ and the log-odds**. 
+
+What does this mean for our coefficients? In the realm of log-odds, this is pretty straightforward:
+
+- Our $\beta_0$ value gives the estimated log-odds when $X=0$.  
+- Our $\beta_1$ value means: for each 1-unit increase in $X$, increase the log-odds of our outcome by $\beta_1$. 
+
+But this isn't particularly intuitive. How are we supposed to interpret changes in the "log odds" of some outcome? What does this mean for the *odds*, or even better, the actual *probabilities*? I think one of the clearest ways to understand this is to calculate these values for a specific value of X. 
+
+Let's say our parameter estimates are as follows:
+
+$\log{\frac{p(Y)}{1 - p(Y)}} = -10 + 2X$
+
+If $X = 10$, this means that our **log-odds** is $-10 + 2*10 = 10$. This is a log-value, so to recover the raw *odds*, we simply exponentiate that value, i.e., $e^10$ or `exp(10)`, which is `22026.47`. As it turns out, our **probability** is equal to: `odds / (1 + odds)`. So we can substitute `22026.47` in that equation, $\frac{22026.47}{1 + 22026.47} = .9999546$, or approximately `.99` (i.e., `99%`). 
+
+**A very common question at this point is how to interpret $\beta_1$ with respect to the probability of our outcome. But importantly, the probability of our outcome doesn't scale linearly! So the amount that $p(Y)$ changes as a function of $X$ depends not only on $\beta_1$ but on the actual value of $X$.**
+
+Another way to illustrate this is to visualize the relationship between *probability*, *odds*, and *log-odds*, which I do below.
+
+
+```{r}
+probs = seq(0, 1, .001)
+
+df_probs = data.frame(probability = probs,
+                      odds = probs / (1 - probs),
+                      log_odds = log(probs / (1 - probs)))
+
+df_probs %>%
+  ggplot(aes(x = probability,
+             y = odds)) +
+  geom_point() +
+  ggtitle("odds ~ probability") +
+  theme_minimal()
+
+df_probs %>%
+  ggplot(aes(x = odds,
+             y = log_odds)) +
+  geom_point() +
+  ggtitle("log(odds) ~ odds") +
+  theme_minimal()
+
+df_probs %>%
+  ggplot(aes(x = probability,
+             y = log_odds)) +
+  geom_point() +
+  ggtitle("log(odds) ~ probability") +
+  theme_minimal()
+```
+
+
+## Logistic regression in R
+
+Okay, so how do we actual built a logistic regression in R?
+
+We can use the `glm` function, which is used to fit generalized linear models. We specify that we want to use the `binomial` family, which uses the `logit` link function. This is demonstrated below:
+
+```{r}
+simple_logistic_model = glm(data = Default,
+                            default ~ balance,
+                            family = binomial())
+
+summary(simple_logistic_model)
+
+```
+
+Let's inspect our coefficients. The intercept value represents the log-odds of Y (`default = yes`) when `balance = 0`, and the coefficient for `balance` means: for each 1-unit increase in `balance`, the log-odds of defaulting increase by $\beta_1$. 
+
+To reiterate from earlier: this does *not* mean that the **probability** of defaulting increases by $\beta_1$ with each 1-unit increase in $X$. However, using the values from our coefficients, we can estimate the probability of defaulting for a particular value of X. Let's first rewrite our equation using the model parameters:
+
+$\log{\frac{p(Y)}{1 - p(Y)}} = -10.65 + 0.005499 * X$
+
+Thus, if $X = 400$, our **log-odds** are:
+
+```{r}
+log_odds = -10.65 + 0.005499 * 2000
+log_odds
+```
+
+This means the *odds* are:
+
+```{r}
+odds = exp(log_odds)
+odds
+```
+
+And thus the probability of defaulting is: 
+
+```{r}
+probability = odds / (1 + odds)
+probability
+```
+
+I.e., given a balance of $2000, the probability of defaulting (according to this model) is `r scales::percent(probability)`.
+
+Using the `predict` function, we can output our logistic regression model's *predictions*. By default, this will output the **log-odds**. We can force this function to produce the **probabilities** by passing in the `type = 'response'` parameter.
+
+```{r}
+Default$lr_log_odds = predict(simple_logistic_model)
+Default$logistic_predictions = predict(simple_logistic_model, type = "response")
+```
+
+Importantly, the **log-odds** predictions are what will exhibit a linear relationship with your $X$ variable:
+
+```{r}
+Default %>%
+  ggplot(aes(x = balance,
+             y = lr_log_odds)) +
+  geom_point() +
+  labs(y = "log(odds)",
+       title = "log(odds) ~ balance") +
+  theme_minimal()
+```
+
+Whereas the **probabilities** predictions will exhibit the classic ["S-curve" shape](https://en.wikipedia.org/wiki/Sigmoid_function): 
+
+```{r}
+Default %>%
+  ggplot(aes(x = balance,
+             y = logistic_predictions)) +
+  geom_point() +
+  labs(y = "p(default)",
+       title = "p(default) ~ balance") +
+  theme_minimal()
+```
+
+The sigmoid shape of the probability output is exactly what leads to the confusion mentioned earlier. The change in $p(Y)$ does not scale linearly with $X$, because some changes in $X$ lead to larger changes in $p(Y)$ than others!
+
+### Comparing logistic and linear regression
+
+We can also directly compare the output of the linear model that we built before and the simple logistic model. Note that to illustrate this, I'm going to use the `melt` function from the `reshape2` library.
+
+```{r include=FALSE}
+library(reshape2)
+
+```
+
+```{r}
+
+Default$linear_predictions = predict(simple_linear_model)
+
+reshaped = Default %>%
+  select(balance, logistic_predictions, default_numeric, linear_predictions) %>%
+  melt(id = c("balance", "default_numeric"), variable = "model")
+
+reshaped %>%
+  ggplot(aes(x = balance,
+             y = value,
+             color = model)) +
+  geom_line() +
+  geom_point(aes(x = balance,
+                 y = default_numeric)) +
+  theme_minimal()
+```
+
+
+Interestingly, the *mean* $\hat{Y}$ is actually the same for both models. This mean *also* corresponds to the proportion of people who actually defaulted:
+
+```{r}
+mean(Default$logistic_predictions)
+mean(Default$linear_predictions)
+mean(Default$default_numeric)
+```
+
+
+
+## Other topics in logistic regression
+
+### Multiple logistic regression
+
+As with linear regression, we can generalize logistic regression to include multiple predictors. We use the same parameter estimation techniques (i.e, maximum likelihood estimation) to estimate these new parameters.
+
+For example, in addition to include `balance`, we can also include `student` (whether or not that individual is a student):
+
+```{r}
+logistic_model_student = glm(data = Default,
+                            default ~ balance + student,
+                            family = binomial())
+
+summary(logistic_model_student)
+```
+
+According to the model, it looks like:
+
+- As before, individuals with a larger `balance` are more likely to default on their loan.  
+- Students are actually *less* likely to default on their loan. 
+
+This is also illustrated by plotting our predictions separately for students and non-students. As you'll see below, the `Yes` line is *right-shifted*. That is, for the same balance, students are slightly less likely to default.
+
+```{r}
+Default$new_logistic_predictions = predict(logistic_model_student, type = "response")
+
+Default %>%
+  ggplot(aes(x = balance,
+             y = new_logistic_predictions,
+             color = student)) +
+  geom_line(alpha = .6) +
+  labs(y = "p(default)") +
+  theme_minimal()
+```
+
+Note that if we *only* included `student` as a predictor, we actually get a **positive** coefficient--i.e., students are more likely to default:
+
+```{r}
+logistic_only_student = glm(data = Default,
+                            default ~ student,
+                            family = binomial())
+
+summary(logistic_only_student)
+```
+
+What do we make of this? One intuitive explanation is that `student` is highly correlated with `balance`. Students are more likely to have large credit card balances, and individuals with large credit balances are also more likely to default. But importantly, once we account for the effect of `balance`, we see that students might be *less* likely to default.
+
+### Inferential statistics: which predictors matter?
+
+So far, we've been ignoring the question of evaluating how *important* a given predictor is. But that's typically at the heart of why we're building a statistical model: we want to know how much a particular variable explains variance in our $Y$, and the magnitude of their relationship. 
+
+There are two main ways to do this. First, you can run a **Wald's Z-test** on the coefficient value. That is, given a coefficient of a particular value with a particular standard error, we can infer the *z-score* of that coefficient in the standard normal distribution. R actually gives us this output already, in the `z value` column; the corresponding p-value is in the column to the right.
+
+```{r}
+summary(logistic_model_student)
+```
+
+Second, we can use **model comparison** to determine the explanatory power of a variable. Here, we compare a model including our variable of interest to a model omitting that variable, and ask how much including the variable improves the model. Again, there are several ways to do this, but the most common approach is to conduct a likelihood ratio test. This will give us the difference in residual variance between the models, as well as additional degrees of freedom that the larger model has:
+
+```{r}
+comparison = anova(logistic_only_student, logistic_model_student)
+comparison
+```
+
+We can look up that difference in residual deviance in a chi-squared distribution with the appropriate degrees of freedom, and from that, extract our p-value. In this case, it's very very small:
+
+```{r}
+1 - pchisq(comparison$Deviance[2], comparison$Df[2])
+```
+
+### Using mixed models
+
+If you're using logistic regression in the context of **non-independent data**, you'll probably want to use a *mixed model*. Fortunately, the mixed model extension to logistic regression is fairly straightforward in R, and can be done using the `lme4` package. I won't cover that in detail here, but see my [tutorial on mixed models](https://seantrott.github.io/mixed_models_R/) for more information on building mixed models in R. That tutorial focuses on linear mixed models in particular, but `lme4` comes with the `glmer` function, which is the mixed model equivalent of the `glm` function described above.
+
+# Logistic regression in practice
+
+Now let's use what we've learned on a new dataset, which includes information about the **Intent** of an utterance, as well as a series of acoustic features associated with that utterance. Specifically, we want to know: which acoustic features help us classify whether or not an utterance was intended as a request?
+
+The dataset is included in the GitHub repository under the `data` folder.
+
+## Load data 
+
+First, let's open the data up. (You might need to change your working directory first! I included an example path below; change this to wherever the GitHub repository is stored on your computer.)
+
+```{r}
+# setwd("/Users/seantrott/Dropbox/UCSD/Resources/Methods_training_assistant/tutorials/binary_classification_R/")
+df_audio = read_csv("data/audio_features_spliced.csv")
+nrow(df_audio)
+```
+
+Each subject was supposed to produce *24* utterances: 12 requests, and 12 non-requests. Unfortunately, the recording equipment failed for some subjects some of the time. Let's identify who those subjects are, so we can remove them (as specified in the pre-registration for the study).
+
+```{r}
+n_obs = df_audio %>%
+  group_by(ppt_id) %>%
+  summarise(count = n())
+
+n_obs
+
+complete = n_obs %>%
+  filter(count == 24)
+
+df_audio_filtered = df_audio %>%
+ filter(ppt_id %in% complete$ppt_id)
+nrow(df_audio_filtered)
+
+length(unique(df_audio_filtered$ppt_id))
+
+```
+
+Now our data should be balanced: each subject has 24 observations.
+
+## Necessary data processing
+
+We also need to do a few other things before we can analyze the data. Specifically, we need to **z-score** our acoustic features to account for inter-speaker differences (e.g., in average pitch). We can do this using the `mutate` and `scale` functions:
+
+```{r}
+df_audio_filtered = df_audio_filtered %>% 
+  group_by(speaker) %>% 
+  mutate(mean_f0_z_score = scale(mean_f0),
+         duration_f0_z_score = scale(duration_f0),
+         total_duration_z_score = scale(total_duration),
+         range_f0_z_score = scale(range_f0),
+         sd_f0_z_score = scale(sd_f0),
+         slope_f0_z_score = scale(slope_f0),
+         mean_intensity_z_score = scale(mean_intensity),
+         sd_intensity_z_score = scale(sd_intensity)
+         )
+```
+
+Also, our response variable `label` looks like it has three levels:
+
+```{r}
+table(df_audio_filtered$label)
+```
+
+This is because for *conventional* requests ("Can you open that window?"), the non-request version is a yes/no *question*. Whereas for *non-conventional* requests, the non-request version is a literal *statement*. But to simplify things, let's recode this into `request` vs. `non-request`. 
+
+```{r}
+df_audio_filtered$label_recoded = fct_recode(df_audio_filtered$label,
+                                    "non-request" = "statement",
+                                    "non-request" = "question")
+```
+
+Now we're ready to conduct some analyses.
+
+## Which acoustic features predict intent overall?
+
+Our main question is which acoustic features predicting the **Intent** (`label_recoded`) of our utterances. I'm going to answer this question using *model comparisons*. That is, we start out by building a full model including all the features, then compare this full model to a series of models omitting each variable in turn. If omitting a variable significantly impairs a model, then it seems like it must be important for predicting **Intent**.
+
+Let's start out by building our full, logistic regression model:
+
+```{r}
+model_all = glm(data = df_audio_filtered,
+                label_recoded ~ 
+                  mean_f0_z_score + 
+                  range_f0_z_score + 
+                  sd_f0_z_score + 
+                  duration_f0_z_score +
+                  slope_f0_z_score + 
+                  mean_intensity_z_score + 
+                  sd_intensity_z_score,
+                family = binomial())
+
+summary(model_all)
+```
+
+Judging from the model output, it looks like **F0 slope** is a good predictor. Let's confirm this with model comparisons:
+
+```{r}
+
+model_no_mean_f0 = glm(data = df_audio_filtered,
+                  label_recoded ~ range_f0_z_score + sd_f0_z_score + duration_f0_z_score + 
+                    slope_f0_z_score + mean_intensity_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_range_f0 = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + sd_f0_z_score + duration_f0_z_score + 
+                    slope_f0_z_score + mean_intensity_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_sd_f0 = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + range_f0_z_score + duration_f0_z_score + 
+                    slope_f0_z_score + mean_intensity_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_duration_f0 = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + range_f0_z_score + sd_f0_z_score + 
+                    slope_f0_z_score + mean_intensity_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_slope_f0 = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + range_f0_z_score + sd_f0_z_score + 
+                    duration_f0_z_score + mean_intensity_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_mean_intensity = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + range_f0_z_score + sd_f0_z_score + 
+                    duration_f0_z_score + slope_f0_z_score + sd_intensity_z_score,
+                   family = binomial())
+
+model_no_sd_intensity = glm(data = df_audio_filtered,
+                  label_recoded ~ mean_f0_z_score + range_f0_z_score + sd_f0_z_score + 
+                    duration_f0_z_score + slope_f0_z_score + mean_intensity_z_score,
+                   family = binomial())
+
+mean_f0 = anova(model_no_mean_f0, model_all)
+mean_f0
+p_mean_f0 = pchisq(mean_f0$Deviance[2], mean_f0$Df[2], lower.tail = FALSE)
+p_mean_f0
+
+range_f0 = anova(model_no_range_f0, model_all)
+range_f0
+p_range = pchisq(range_f0$Deviance[2], range_f0$Df[2], lower.tail = FALSE)
+p_range
+
+sd_f0 = anova(model_no_sd_f0, model_all)
+sd_f0
+p_sd_f0 = pchisq(sd_f0$Deviance[2], sd_f0$Df[2], lower.tail = FALSE)
+
+duration_f0 = anova(model_no_duration_f0, model_all)
+duration_f0
+p_duration_f0 = pchisq(duration_f0$Deviance[2], duration_f0$Df[2], lower.tail = FALSE)
+p_duration_f0
+
+slope_f0 = anova(model_no_slope_f0, model_all)
+slope_f0
+p_slope_f0 = pchisq(slope_f0$Deviance[2], slope_f0$Df[2], lower.tail = FALSE)
+p_slope_f0
+
+mean_intensity = anova(model_no_mean_intensity, model_all)
+mean_intensity
+p_mean_intensity = pchisq(mean_intensity$Deviance[2], mean_intensity$Df[2], lower.tail = FALSE)
+p_mean_intensity
+
+sd_intensity = anova(model_no_sd_intensity, model_all)
+sd_intensity
+p_sd_intensity = pchisq(sd_intensity$Deviance[2], sd_intensity$Df[2], lower.tail = FALSE)
+p_sd_intensity
+```
+
+We need to correct for multiple comparisons, which we do with Holm-Bonferroni corrections:
+
+```{r}
+p.adjust(c(p_mean_f0, p_range, p_sd_f0, p_duration_f0, p_slope_f0, 
+           p_mean_intensity, p_sd_intensity), method="holm")
+```
+
+After correcting for multiple comparisons, it looks like **F0 slope** is indeed our only significant predictor---at least when predicting the intent of *all* items combined. As it turns out, down the items by `form` (`conventional` vs. `non-conventional`) reveals that different features are actually predictive for different kinds of requests; feel free to explore any other findings or trends you might find interesting in the data.
+
+
+
+# Support vector machines
+
+Another well-known approach to classification is the [**support vector machine**](https://en.wikipedia.org/wiki/Support-vector_machine), or SVM. 
+
+SVMs are quite common in machine learning. Rather than calculating the probability of an observation belonging to a certain class---as in logistic regression---an SVM is a generalization of a **maximal margin classifier**, in which the underlying goal is to draw a *hyperplane* through a set of observations that separates the data into two classes. Typically, these classes are coded as ${-1, 1}$.
+
+If such a clean, linear division is not possible in the current feature-space, SVMs can expand the dimensionality of the dataset using a **kernel function**, and draw a hyperplane in the higher-dimensional space. Thus, they're an excellent tool for binary classification when the decision boundary is fundamentally non-linear.
+
+The goal of this tutorial is to build a high-level intuition for the conceptual motivation of SVMs and the equations used to fit them. Furthermore, although SVMs are usually seen as a distinct kind of classifier from logistic regression, there are some interesting similarities that will be discussed towards the end of the tutorial.
+
+
+## Introduction to hyperplane-based classification
+
+### Terminology
+
+As noted above, the core principle underlying SVMs is the idea of a **separating hyperplane**. In $p$-dimensional space, a hyperplane is a flat subspace of dimension $p - 1$. For example, in 2D space, a hyperplane would simply be a line, and the equation is given thus:
+
+$\beta_0 + \beta_1X_1 + \beta_2X_2 = 0$
+
+SVMs are actually an extension to a type of classifier called a support vector classifier, which in turn is a generalization of the [*maximal margin classifier*](https://en.wikipedia.org/wiki/Margin_classifier). The goal of a maximal margin classifier is to draw a hyperplane such that the observations on either side of that hyperplane correspond to the classes in your dataset. I.e., the hyperplane *divides* the data into two classes.
+
+Note that if such a clean separation does exist, there are actually an *infinite* number of hyperplanes that could be drawn. I.e., each could be rotated slightly without touching any other points. So how do we determine the "best" hyperplane to draw?
+
+The maximal margin classifier tries to **maximize** the **distance** between the hyperplane and the closest points. This distance is called the **margin** (hence the name, "maximal margin classifier"). The metaphor used in [An Introduction to Statistical Learning in R](http://faculty.marshall.usc.edu/gareth-james/ISL/) is that we're trying to fit the widest "slab" possible between the observations from our two classes. The midpoint of that "slab" is the hyperplane.
+
+Finally, the term **support vector** refers to the observations that are closest to the hyperplane. Because the underlying goal is to maximize the distance between the hyperplane and the closest points (i.e., the **margin**), these are the points that most affect where the hyperplane is drawn. In other words, the hyperplane depends the most on these obsevations, and thus they can be said to "support" the hyperplane. Moving these observations (the **support vectors**) has the largest impact on where the hyperplane is drawn^[Note that this point will become important later on, when we discuss the **cost** term used in fitting SVCs and SVMs.].
+
+### Example of a linear decision boundary
+
+What exactly do we *mean* by drawing a line between two sets of data? One way to illustrate this is to simulate two different distributions with different means. 
+
+Below, I create two 2D matrices by simulating two normal distributions of length centered around either `0` or `1`, then splitting each vector into a 2D matrix. The columns of this matrix correspond to the $X_1$ and $X_2$ dimensions of our data, respectively; each matrix thus has 40 observations $(X_1, X_2)$. 
+
+Then I create a $y$ variable by repeating the class labels ${-1, 1}$ 80 times: 40 for each matrix. 
+
+Note that there are many alternative ways one could simulate data from two different classes. This approach is relatively straightforward to implement in R.
+
+```{r}
+set.seed(42)
+X_class_a = matrix(rnorm(0, sd=.2, n=80), 40, 2)
+X_class_b = matrix(rnorm(1, sd=.2, n=80), 40, 2)
+
+X = rbind(X_class_a, X_class_b)
+
+y = rep(c(-1, 1), c(40, 40))
+```
+
+
+Here's what the two classes look like when we plot them out. It's very clear that one could easily draw a line separating these classes.
+
+```{r}
+df_linear = data.frame(x1 = X[,1],
+                       x2 = X[,2],
+                       class = factor(y))
+
+df_linear %>%
+  ggplot(aes(x = x1,
+             y = x2,
+             color = class)) +
+  geom_point() +
+  theme_minimal()
+```
+
+
+
+### Fitting a maximal margin classifier
+
+These principles can be translated to the following optimization problem:
+
+We want to **maximize** our margin $M$ for the set of coefficient values ${\beta_0, \beta_1, ..., \beta_p}$ (where $p$ is the number of parameters), subject to two constraints:
+
+$\sum_{j=1}^{p} \beta_j^2 = 1$
+
+$y_i * (\beta_0 + \beta_1x_{i1} + ... + \beta_pX_{ip} ≥ M$
+
+The first constraint requires that the sum of our squared coefficient values is equal to 1^[Note that this constraint looks similar to the penalty term in ridge regression. Later on, we'll see a generalization of this constraint that solidifies that similarity. For now, this constraint---when combined with the second requirement---produces the effect that the product of each observation $y_i$ and its predicted value $\hat{y_i}$ captures the perpendicular distance between that observation and the hyperplane]. The second constraint requires that for each observation $y_i$, the product between $y_i$ and our predicted value $\hat{y_i}$ is greater than or equal to our margin $M$, and guarantees that our points fall on the correct side of the margin.
+
+Personally, I had trouble understanding this latter constraint. But recall that our values for $Y$ are two classes coded as ${-1, 1}$. This means that any given observation $y_i$ could be either $-1$ or $1$--i.e., either positive or negative. Similarly, our predicted value $\hat{y_i}$ could  be either positive or negative. **Critically, this constraint requires that the sign of our predicted value matches the sign of our actual observation.** If the signs match, then the product $y_i * \hat{y_i}$ will always be positive, and thus has a greater chance of being larger than $M$. Whereas if the signs *don't* match, then the product $y_i * \hat{y_i}$ will be negative, meaning it's been classified on the wrong side of the margin.
+
+Furthermore, we ideally want our predicted value $\hat{h_i}$ to be as large as possible. Larger values of $\hat{h_i}$ means larger values for the product $y_i * \hat{y_i}$, which in turn is more likely to be greater than or equal to $M$. And remember, we're trying to *maximize* $M$: so if everything goes well, we should find a set of coefficients that consistently produce very large values for the product $y_i * \hat{y_i}$ and are sufficiently far enough away from an already large margin $M$.
+
+
+
+### Fitting a support vector classifier
+
+The equation given in the section above enforces a strict *separability* between our classes. This assumption has two problems:
+
+1) Strict separability rarely exists in practice.  
+2) Enforcing strict separability makes the hyperplane overly sensitive to the support vectors, i.e., the few observations that define where it's situated in space.
+
+Returning to the example above, we can illustrate this simply by increasing the variance in each of our distributions. The classes are still clearly distinct, but it'd be impossible to draw a line (in this space) that perfectly separates them.
+
+```{r}
+set.seed(42)
+X_class_a = matrix(rnorm(0, sd=.5, n=80), 40, 2)
+X_class_b = matrix(rnorm(1, sd=.5, n=80), 40, 2)
+
+X = rbind(X_class_a, X_class_b)
+
+y = rep(c(-1, 1), c(40, 40))
+
+df_linear = data.frame(x1 = X[,1],
+                       x2 = X[,2],
+                       class = factor(y))
+
+df_linear %>%
+  ggplot(aes(x = x1,
+             y = x2,
+             color = class)) +
+  geom_point() +
+  theme_minimal()
+```
+
+
+We can sacrifice some of this precision in favor of a more **robust** model, the **support vector classifier**. This extension allows for **soft margins**, i.e., allowing some data points to fall on either side of the margin or hyperplane. 
+
+The idea behind a support vector classifier (SVC) is very similar to the maximal margin classifier. In fact, the SVC is a generalization of the maximal classifier that allows for more wiggle room in where the hyperplane is drawn. This wiggle room, or "soft margin", is instantiated by the following changes to our equation:
+
+First, we add **slack variables** allowing our observations to fall on either side of the margin or hyperplane. Thus, we still optimize for maximizing $M$ for ${\beta_0, \beta_1, ..., \beta_p}$, but we also include **slack variables** ${\epsilon_0, \epsilon_1, ..., \epsilon_p}$.
+
+Second, the product of $Y$ and $Y'$ is no longer constrained to be $≥ M$, but $≥ M * (1 - \epsilon_i)$.
+
+And third, we place two restrictions are these slack variables:
+
+$\epsilon_i ≥ 0$
+
+$\sum_{i=1}^{n} \epsilon_i ≤ C$, where $C$ is a **nonnegative tuning parameter**.
+
+The slack variable $\epsilon_i$ tells us where observation $i$ is located relative to the margin and hyperplane. If $\epsilon_i = 0$, then it's on the correct side of the margin. If $\epsilon_i > 0$, then it's on the wrong side of the margin, and if $\epsilon_i > 1$, then it's on the wrong side of the hyperplane.
+
+The tuning parameter $C$ can be conceptualized as **budget** for the amount of wiggle room we tolerate. If $C = 0$, there's no wiggle room at all, and our equation reduces to the maximal margin classifier described above. For $C > 0$, no more than $C$ observations can be on the wrong side of the hyperplane. Thus: **As the budget C increases, we become more tolerant of violations to the margin, and so will the margin will widen. Conversely, as C decreases, we become less tolerant of violations to the margin and so the margin narrows.** (James et al, 2013, pg. 347).
+
+Conceptually, we can connect this tuning parameter $C$ to the notion of a [bias-variance trade-off](https://en.wikipedia.org/wiki/Bias%E2%80%93variance_tradeoff). Recall that only *support vectors* affect where the hyperplane is drawn. Critically, our value for $C$ determines how many support vectors there are. A larger value for $C$ means that more data points affect the hyperplane because the margin is wider, and thus more data points violate the margin; the converse is true for smaller values for $C$. Intuitively, then, a larger value for $C$ corresponds to a model with lower variance (since it's fit to more observations) but higher bias, while a smaller value for $C$ corresponds to a model with higher variance (since it's only fit to a few observations).
+
+
+## Introduction to support vector machines
+
+The models described above attempt to draw a hyperplane that best separates the two classes present in our data. If the boundary between our classes is linear, this approach makes sense. Unfortunately, many boundaries are actually **non-linear**, i.e., many classes are not **linearly separable**. In such cases, fitting a hyperplane between our classes will be unsuccessful.
+
+An analogy can be drawn to linear regression. Often, the relationship between $X$ and $Y$ is non-linear; in such cases, we can expand our feature-space using quadratic and cubic terms to address this non-linearity, giving us more **flexibility** in the relationships we can predict (though also increasing the danger of overfitting^[Note, again, the central theme of a bias-variance trade-off. A more flexible model is more susceptible to overfitting to a particular dataset, because it will mine the *particular relationships* that exist in that dataset. In contrast, a model with more built-in assumptions (i.e., higher *bias*) about the kinds of relationships that can exist (e.g., a linear model) might produce worse fit to that dataset, but might generalize better to other datasets.]).
+
+### Example: demonstrating non-linear decision boundaries
+
+A classic example of a non-linear decision boundary is the **X-OR** (aka "exclusive OR") problem. We can simulate data that roughly resembles this problem. First, we simulate our `OFF` classes, i.e., data that is either centered around `[0, 0]` or `[1, 1]`. 
+
+
+```{r}
+set.seed(42)
+X_class_a = rbind(matrix(rnorm(1, sd=.1, n=20), 10, 2), 
+                  matrix(rnorm(0, sd=.1, n=20), 10, 2))
+
+```
+
+It's a little more complicated to simulate our `ON` clsases, i.e., data that's centered around either `[0, 1]` or `[1, 0]`. The way I do it below is a little messy, but it works. Again, there are probably many alternative solutions to simulating exclusive or data.
+
+```{r}
+X_class_b = cbind(c(rnorm(0, .1, n=10), rnorm(1, .1, n=10)),
+                  c(rnorm(1, .1, n=10), rnorm(0, .1, n=10)))
+
+```
+
+Now we put them together. As you can see below, it'd be very hard to draw a line between these classes.
+
+```{r}
+
+X = rbind(X_class_a, X_class_b)
+
+y = rep(c(-1, 1), c(20, 20))
+
+df_x_or = data.frame(x1 = X[1:20,],
+                     x2 = X[21:40,],
+                     y = factor(y))
+
+df_x_or = data.frame(X = X,
+                     y = factor(y)) %>%
+  mutate(X1 = X.1,
+         X2 = X.2) %>%
+  select(X1, X2, y)
+
+
+df_x_or %>%
+  ggplot(aes(x = X1,
+             y = X2,
+             color = y)) +
+  geom_point() +
+  theme_minimal()
+```
+
+
+### Kernel functions
+
+Just as with polynomial regression, one solution to non-linear decision boundaries is to try to expand our feature-space by applying various polynomial terms to our predicts $X$, e.g., quadratic and cubic terms. But the space of possible transformations is very large, especially when we have many features, and applying these computations can be costly. SVMs use a principled approach to expanding our feature-space called **kernel functions**.
+
+This is enabled by the observation that optimizing the parameters for a support vector classifier actually involves the *inner products* of our observations, rather than the observations themselves. This means the SVC can be represented as follows:
+
+$f(x) = \beta_0 + \sum_{i=1}^{n}\alpha_i \langle x, x_i \rangle$
+
+Where there are $n$ parameters $alpha_i$. To estimate these parameters, we just need the inner products $\langle x_i, x_{i'} \rangle$ between all pairs of observations. Furthermore, it turns out that we really only need to find the parameters for the set of **support vectors**^[Coefficients for observations that aren't support vectors will be zero.] $S$, so we can further constrain that $i \in{S}$. To quickly summarize: to compute our coefficients, all we need are the inner products of the support vectors.
+
+The reason this is helpful is that we can then replace all of our inner products with *generalizations* of the form $K(x_i, x_{i'})$. Here, $K$ is a **kernel function**, which quantifies the similarity of two observations. This function could be *linear*, e.g., just computing the original inner product between the two vectors.
+
+But kernels can also be **non-linear**. For example, instead of just computing the inner product, we can raise it to some positive integer $d$. If $d > 1$, this results in a non-linear expanasion of our feature-space, which in turn grants us a lot of flexibility in how we draw the decision boundary. This is analogous to expanding our features individually using polynomial functions. I'm not going to list all of the kernels here, but [here](https://en.wikipedia.org/wiki/Kernel_method#Popular_kernels) is a list of popular kernels. To my knowledge, the main kernels used for SVMs (besides a simple linear kernel) are *polynomial* and *radial* kernels.
+
+Finally, it's important to note that while the kernel functions themselves can be non-linear, the **hyperplane** drawn in the expanded feature-space is still linear. It's just that in the original feature-space, the hyperplane might not be linear. In other words, the non-linear kernel functions allow us to apply the same basic approach of drawing a line through our data, but in a higher-dimensional space. 
+
+
+## SVMs in R
+
+SVMs are pretty straightforward to build in R using the `svm` function from the `e1071` library. In fact, much of the syntax is actually analogous to the `lm` and `glm` syntax you're already familiar with.
+
+### SVMs for linearly separable classes
+
+First let's try building an SVM for the linearly separable classes we simulated earlier:
+
+```{r}
+set.seed(42)
+X_class_a = matrix(rnorm(0, sd=.5, n=80), 40, 2)
+X_class_b = matrix(rnorm(1, sd=.5, n=80), 40, 2)
+
+X = rbind(X_class_a, X_class_b)
+
+y = rep(c(-1, 1), c(40, 40))
+
+df_linear = data.frame(X1 = X[,1],
+                       X2 = X[,2],
+                       y = factor(y))
+
+```
+
+We can **fit** an SVM to this data using the `svm`  function.
+
+Note that for the purposes of this tutorial, I'm skipping the step of splitting our data into training and testing sets, but this is very important if you're interested in generalizability; in particular, polynomial and radial SVMs might overfit to the initial set. I'm also skipping the step of fitting our **tuning parameter** $C$, which determines how much wiggle-room we have in fitting our data.
+
+```{r}
+svmfit = svm(y ~ X1 + X2,
+             data = df_linear, 
+             kernel = "linear", 
+             cost = 10, 
+             scale = FALSE)
+```
+
+This `svmfit` object can now be used for several purposes. First, we can see how well we did in classifying our data. Using the `predict` function, we can compare the predictions from `svmfit` to the actual labels.
+
+```{r}
+table(df_linear$y, predict(svmfit))
+```
+
+It looks like we did quite well. We can also **plot** our decision boundary using the built-in `plot` function:
+
+```{r}
+plot(svmfit, df_linear)
+```
+
+Note that this particular `svmfit` was fit using a **linear kernel**. This makes sense, because we intentionally simulated our data to be linearly separable. But we can still fit an SVM using a **non-linear kernel**, even if we believe our data to be linearly separable. This is as easy as changing the `kernel` parameter.
+
+Let's use a `radial` kernel instead:
+
+```{r}
+svmfit = svm(y ~ X1 + X2,
+             data = df_linear, 
+             kernel = "polynomial", 
+             cost = 10, 
+             scale = FALSE)
+```
+
+Our accuracy actually goes down slightly:
+
+```{r}
+table(df_linear$y, predict(svmfit))
+```
+
+Our classification plot looks pretty similar, but with a somewhat "curvier" decision boundary. This is roughly what we'd expect. The data were designed to be linearly separable, so even fitting our model with a  polynomial kernel shouldn't change that much about the best-fitting hyperplane. 
+
+```{r}
+plot(svmfit, df_linear)
+```
+
+
+Non-linear kernels become much more important when we're dealing with non-linear decision boundaries.
+
+### SVMs for non-linearly separable classes
+
+Let's return to the X-OR data from before. Recall that it looks like this:
+
+```{r}
+df_x_or %>%
+  ggplot(aes(x = X1,
+             y = X2,
+             color = y)) +
+  geom_point() +
+  theme_minimal()
+```
+
+
+We'd have a very tough time drawing a line between these classes. We can certainly try, but we probably won't be very accurate:
+
+```{r}
+svmfit = svm(y ~ X1 + X2,
+             data = df_x_or, 
+             kernel = "linear", 
+             cost = 10, 
+             scale = FALSE)
+
+table(df_x_or$y, predict(svmfit))
+```
+
+We clearly don't do very well. This is very illustrated by visualizing the decision boundary:
+
+```{r}
+plot(svmfit, df_x_or)
+```
+
+This is exactly where using a **non-linear** kernel function comes in. Let's first try with a **radial** kernel.
+
+```{r}
+svmfit = svm(y ~ X1 + X2,
+             data = df_x_or, 
+             kernel = "radial", 
+             cost = 10, 
+             scale = FALSE)
+
+table(df_x_or$y, predict(svmfit))
+```
+
+Now we're at 100% accuracy. Granted, this isn't using a train/test split, and as noted before, radial kernels are even more likely to overfit than a linear kernel because they have so much more flexibility in how the decision boundary is drawn.
+
+But still, at least the underlying function is actually appropriate for the data. Let's visualize the decision boundary:
+
+```{r}
+plot(svmfit, df_x_or)
+```
+
+Finally, let's see how we do with a **polynomial** kernel:
+
+```{r}
+svmfit = svm(y ~ X1 + X2,
+             data = df_x_or, 
+             kernel = "polynomial", 
+             cost = 10, 
+             scale = FALSE)
+
+table(df_x_or$y, predict(svmfit))
+```
+
+Still quite good! Our decision boundary looks pretty similar.
+
+```{r}
+plot(svmfit, df_x_or)
+```
+
+
+Just as a final note to remember: although the decision boundary looks non-linear in the original feature space (and it is!), the hyperplane we fit in the higher-dimensional space is still fundamentally linear. It's just that the non-linear kernel allows us to explore very high-dimensional feature-spaces to find the best-fitting hyperplane.
+
+
+
+
+
+
+
+
+
+# Footnotes
