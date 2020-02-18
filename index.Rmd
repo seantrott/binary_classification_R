@@ -200,7 +200,7 @@ Let's say our parameter estimates are as follows:
 
 $\log{\frac{p(Y)}{1 - p(Y)}} = -10 + 2X$
 
-If $X = 10$, this means that our **log-odds** is $-10 + 2*10 = 10$. This is a log-value, so to recover the raw *odds*, we simply exponentiate that value, i.e., $e^10$ or `exp(10)`, which is `22026.47`. As it turns out, our **probability** is equal to: `odds / (1 + odds)`. So we can substitute `22026.47` in that equation, $\frac{22026.47}{1 + 22026.47} = .9999546$, or approximately `.99` (i.e., `99%`). 
+If $X = 10$, this means that our **log-odds** is $-10 + 2*10 = 10$. This is a log-value, so to recover the raw *odds*, we simply exponentiate that value, i.e., $e^{10}$ or `exp(10)`, which is `22026.47`. As it turns out, our **probability** is equal to: `odds / (1 + odds)`. So we can substitute `22026.47` in that equation, $\frac{22026.47}{1 + 22026.47} = .9999546$, or approximately `.99` (i.e., `99%`). 
 
 **A very common question at this point is how to interpret $\beta_1$ with respect to the probability of our outcome. But importantly, the probability of our outcome doesn't scale linearly! So the amount that $p(Y)$ changes as a function of $X$ depends not only on $\beta_1$ but on the actual value of $X$.**
 
