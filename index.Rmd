@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE, dpi=300)
 
 # High-level goals
 
-This tutorial is intended as an introduction to two^[Future iterations of the tutorial may extend this to other classification models, such as [linear discriminant analysis](https://en.wikipedia.org/wiki/Linear_discriminant_analysis).] approaches to binary classification: [logistic regression](https://en.wikipedia.org/wiki/Logistic_regression) and [support vector machines](https://en.wikipedia.org/wiki/Support-vector_machine). It will accompany my 02/17/2020 workshop, "Binary classification in R".
+This tutorial is intended as an introduction to two^[Future iterations of the tutorial may extend this to other classification models, such as [linear discriminant analysis](https://en.wikipedia.org/wiki/Linear_discriminant_analysis).] approaches to binary classification: [logistic regression](https://en.wikipedia.org/wiki/Logistic_regression) and [support vector machines](https://en.wikipedia.org/wiki/Support-vector_machine). It will accompany my 02/18/2020 workshop, "Binary classification in R".
 
 Concepts covered will include:
 
