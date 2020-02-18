@@ -681,7 +681,7 @@ The first constraint requires that the sum of our squared coefficient values is 
 
 Recall that our values for $Y$ are two classes coded as ${-1, 1}$. This means that any given observation $y_i$ could be either $-1$ or $1$--i.e., either positive or negative. Similarly, our predicted value $\hat{y_i}$ could  be either positive or negative. **Critically, this constraint requires that the sign of our predicted value matches the sign of our actual observation.** If the signs match, then the product $y_i * \hat{y_i}$ will always be positive, and thus has a greater chance of being larger than $M$. Whereas if the signs *don't* match, then the product $y_i * \hat{y_i}$ will be negative, meaning it's been classified on the wrong side of the margin.
 
-Furthermore, we ideally want our predicted value $\hat{h_i}$ to be as large as possible. Larger values of $\hat{h_i}$ means larger values for the product $y_i * \hat{y_i}$, which in turn is more likely to be greater than or equal to $M$. And remember, we're trying to *maximize* $M$: so if everything goes well, we should find a set of coefficients that consistently produce very large values for the product $y_i * \hat{y_i}$ and are sufficiently far enough away from an already large margin $M$.
+Furthermore, we ideally want our predicted value $\hat{y_i}$ to be as large as possible. Larger values of $\hat{y_i}$ means larger values for the product $y_i * \hat{y_i}$, which in turn is more likely to be greater than or equal to $M$. And remember, we're trying to *maximize* $M$: so if everything goes well, we should find a set of coefficients that consistently produce very large values for the product $y_i * \hat{y_i}$ and are sufficiently far enough away from an already large margin $M$.
 
 
 
