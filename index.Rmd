@@ -619,9 +619,7 @@ The goal of this tutorial is to build a high-level intuition for the conceptual 
 
 ### Terminology
 
-As noted above, the core principle underlying SVMs is the idea of a **separating hyperplane**. In $p$-dimensional space, a hyperplane is a flat subspace of dimension $p - 1$. For example, in 2D space, a hyperplane would simply be a line, and the equation is given thus:
-
-$\beta_0 + \beta_1X_1 + \beta_2X_2 = 0$
+As noted above, the core principle underlying SVMs is the idea of a **separating hyperplane**. In $p$-dimensional space, a hyperplane is a flat subspace of dimension $p - 1$. For example, in 2D space, a hyperplane would simply be a line.
 
 SVMs are actually an extension to a type of classifier called a support vector classifier, which in turn is a generalization of the [*maximal margin classifier*](https://en.wikipedia.org/wiki/Margin_classifier). The goal of a maximal margin classifier is to draw a hyperplane such that the observations on either side of that hyperplane correspond to the classes in your dataset. I.e., the hyperplane *divides* the data into two classes.
 
