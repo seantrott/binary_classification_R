@@ -956,9 +956,11 @@ plot(svmfit, df_x_or)
 Just as a final note to remember: although the decision boundary looks non-linear in the original feature space (and it is!), the hyperplane we fit in the higher-dimensional space is still fundamentally linear. It's just that the non-linear kernel allows us to explore very high-dimensional feature-spaces to find the best-fitting hyperplane.
 
 
+# Citation
 
+For citation, please cite as:
 
-
+Trott, S. (2020). Binary classification in R. Retrieved from https://seantrott.github.io/binary_classification_R/.
 
 
 
